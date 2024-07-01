@@ -64,11 +64,13 @@ class GenerationStatistics:
                 f"| Inference Time (s) | {self.input_time:.2f}            | {self.output_time:.2f}            | {self.total_time:.2f}            |")
 
 class Book:
-    def __init__(self, structure):
+    def __init__(self, title, structure):
+        self.title = title
         self.structure = structure
         self.contents = {title: "" for title in self.flatten_structure(structure)}
         self.placeholders = {title: st.empty() for title in self.flatten_structure(structure)}
 
+        st.markdown(f"# {self.title}")
         st.markdown("## Generating the following:")
         toc_columns = st.columns(4)
         self.display_toc(self.structure, toc_columns)
@@ -120,7 +122,7 @@ class Book:
         if structure is None:
             structure = self.structure
         
-        markdown_content = ""
+        markdown_content = f"# {self.title}\n\n"
         for title, content in structure.items():
             if self.contents[title].strip():  # Only include title if there is content
                 markdown_content += f"{'#' * level} {title}\n{self.contents[title]}\n\n"
@@ -212,6 +214,31 @@ def create_pdf_file(content: str) -> BytesIO:
     
     return pdf_buffer
 
+def generate_book_title(prompt: str):
+    """
+    Generate a book title using AI.
+    """
+    completion = st.session_state.groq.chat.completions.create(
+        model="llama3-70b-8192",
+        messages=[
+            {
+                "role": "system",
+                "content": "Generate suitable book titles for the provided topics. There is only one generated book title! Don't give any explanation or add any symbols, just write the title of the book. The requirement for this title is that it must be between 7 and 25 words long, and it must be attractive enough!"
+            },
+            {
+                "role": "user",
+                "content": f"Generate a book title for the following topic. There is only one generated book title! Don't give any explanation or add any symbols, just write the title of the book. The requirement for this title is that it must be at least 7 words and 25 words long, and it must be attractive enough:\n\n{prompt}"
+            }
+        ],
+        temperature=0.7,
+        max_tokens=100,
+        top_p=1,
+        stream=False,
+        stop=None,
+    )
+
+    return completion.choices[0].message.content.strip()
+
 def generate_book_structure(prompt: str):
     """
     Returns book structure content as well as total tokens and total time for generation.
@@ -225,7 +252,7 @@ def generate_book_structure(prompt: str):
             },
             {
                 "role": "user",
-                "content": f"Write a comprehensive structure, omiting introduction and conclusion sections (forward, author's note, summary), for a long (>300 page) book on the following subject:\n\n<subject>{prompt}</subject>"
+                "content": f"Write a comprehensive structure, omitting introduction and conclusion sections (forward, author's note, summary), for a long (>300 page) book on the following subject:\n\n<subject>{prompt}</subject>"
             }
         ],
         temperature=0.3,
@@ -282,6 +309,8 @@ if 'button_text' not in st.session_state:
 if 'statistics_text' not in st.session_state:
     st.session_state.statistics_text = ""
 
+if 'book_title' not in st.session_state:
+    st.session_state.book_title = ""
 
 st.write("""
 # Groqbook: Write full books using llama3 (8b and 70b) on Groq
@@ -299,13 +328,12 @@ def empty_st():
 try:
     if st.button('End Generation and Download Book'):
         if "book" in st.session_state:
-
             # Create markdown file
             markdown_file = create_markdown_file(st.session_state.book.get_markdown_content())
             st.download_button(
                 label='Download Text',
                 data=markdown_file,
-                file_name='generated_book.txt',
+                file_name=f'{st.session_state.book_title}.txt',
                 mime='text/plain'
             )
 
@@ -314,12 +342,11 @@ try:
             st.download_button(
                 label='Download PDF',
                 data=pdf_file,
-                file_name='generated_book.pdf',
-                mime='text/plain'
+                file_name=f'{st.session_state.book_title}.pdf',
+                mime='application/pdf'
             )
         else:
             raise ValueError("Please generate content first before downloading the book.")
-
 
     with st.form("groqform"):
         if not GROQ_API_KEY:
@@ -343,27 +370,27 @@ try:
                     placeholder.empty()
 
         if submitted:
-            if len(topic_text)<10:
+            if len(topic_text) < 10:
                 raise ValueError("Book topic must be at least 10 characters long")
 
             st.session_state.button_disabled = True
-            # st.write("Generating structure in background....")
-            st.session_state.statistics_text = "Generating structure in background...." # Show temporary message before structure is generated and statistics show
+            st.session_state.statistics_text = "Generating book title and structure in background...."
             display_statistics()
 
             if not GROQ_API_KEY:
                 st.session_state.groq = Groq(api_key=groq_input_key)
 
-            large_model_generation_statistics, book_structure = generate_book_structure(topic_text)
+            # Generate AI book title
+            st.session_state.book_title = generate_book_title(topic_text)
+            st.write(f"Generated book title: {st.session_state.book_title}")
 
-            # st.session_state.statistics_text = str(large_model_generation_statistics)
-            # display_statistics()
+            large_model_generation_statistics, book_structure = generate_book_structure(topic_text)
 
             total_generation_statistics = GenerationStatistics(model_name="llama3-8b-8192")
 
             try:
                 book_structure_json = json.loads(book_structure)
-                book = Book(book_structure_json)
+                book = Book(st.session_state.book_title, book_structure_json)
                 
                 if 'book' not in st.session_state:
                     st.session_state.book = book
